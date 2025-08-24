@@ -6,7 +6,6 @@ from torch.cuda.amp import autocast, GradScaler
 import math
 import random
 import numpy as np
-from datasets import load_dataset
 from tqdm import tqdm
 import time
 from transformers import AutoTokenizer
@@ -35,7 +34,7 @@ class ModelConfig:
     n_layers: int = 6
     d_ff: int = 1536
     batch_size: int = 24
-    max_steps: int = 5000
+    num_epochs: int = 10
 
     # Training parameters
     gradient_accumulation_steps: int = 4
@@ -111,9 +110,9 @@ class Muon(torch.optim.Optimizer):
                 p.add_(g.view_as(p), alpha=-group["lr"] * max(1, p.size(-2) / p.size(-1))**0.5)
 	
 def load_and_cache_data(config: ModelConfig, cache_dir: str = "data_cache"):
-    """Load and cache tokenized data to avoid reprocessing"""
+    """Load and cache tokenized data from local Python files"""
     os.makedirs(cache_dir, exist_ok=True)
-    cache_file = f"{cache_dir}/tokenized_data_{config.num_documents}_{config.max_tokens}.pkl"
+    cache_file = f"{cache_dir}/tokenized_data_local_files.pkl"
 
     # Check if cached data exists
     if os.path.exists(cache_file):
@@ -129,23 +128,29 @@ def load_and_cache_data(config: ModelConfig, cache_dir: str = "data_cache"):
         print(f"✅ Loaded {len(texts)} documents, {len(tokens):,} tokens from cache")
         return texts, tokenizer, tokens
 
-    print(f"🔄 Processing new data (will cache for future use)")
+    print(f"🔄 Processing local Python files (will cache for future use)")
 
     # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M", token=False)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Load dataset
-    dataset = load_dataset("HuggingFaceTB/smollm-corpus", "cosmopedia-v2", split="train", streaming=True, token=False)
-
+    # Load local Python files from data directory
+    data_dir = "data"
+    python_files = ["2.py", "3.py", "4.py", "5.py"]
+    
     texts = []
-    for i, item in enumerate(dataset):
-        if i >= config.num_documents:
-            break
-        texts.append(item["text"][:3000])
+    for filename in python_files:
+        file_path = os.path.join(data_dir, filename)
+        if os.path.exists(file_path):
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                texts.append(content)
+                print(f"📁 Loaded {filename}: {len(content)} characters")
+        else:
+            print(f"⚠️ Warning: {filename} not found")
 
-    print(f"Loaded {len(texts)} documents")
+    print(f"Loaded {len(texts)} Python files")
 
     # Tokenize
     print("Tokenizing texts...")
@@ -293,6 +298,70 @@ class MinimalLLM(nn.Module):
         logits = self.lm_head(x)
         return logits
 
+    def generate(self, input_ids, max_length=100, temperature=1.0, top_p=0.9, 
+                 top_k=50, do_sample=True, pad_token_id=None, eos_token_id=None, 
+                 repetition_penalty=1.0):
+        """Generate text continuation from input_ids"""
+        batch_size = input_ids.shape[0]
+        current_length = input_ids.shape[1]
+        
+        # Set default tokens if not provided
+        if pad_token_id is None:
+            pad_token_id = self.config.vocab_size - 1
+        if eos_token_id is None:
+            eos_token_id = self.config.vocab_size - 1
+        
+        # Initialize output with input_ids
+        output = input_ids.clone()
+        
+        with torch.no_grad():
+            for _ in range(max_length - current_length):
+                # Get model predictions
+                logits = self.forward(output)
+                next_token_logits = logits[:, -1, :] / temperature
+                
+                # Apply repetition penalty
+                if repetition_penalty != 1.0:
+                    for i in range(batch_size):
+                        for previous_token in set(output[i].tolist()):
+                            if previous_token < next_token_logits.shape[-1]:
+                                next_token_logits[i, previous_token] /= repetition_penalty
+                
+                # Apply top-k filtering
+                if top_k > 0:
+                    top_k_logits, top_k_indices = torch.topk(next_token_logits, top_k)
+                    next_token_logits = torch.full_like(next_token_logits, float('-inf'))
+                    next_token_logits.scatter_(1, top_k_indices, top_k_logits)
+                
+                # Apply top-p (nucleus) filtering
+                if top_p < 1.0:
+                    sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
+                    cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+                    
+                    # Remove tokens with cumulative probability above the threshold
+                    sorted_indices_to_remove = cumulative_probs > top_p
+                    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                    sorted_indices_to_remove[..., 0] = 0
+                    
+                    indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
+                    next_token_logits[indices_to_remove] = float('-inf')
+                
+                # Sample next token
+                if do_sample:
+                    probs = F.softmax(next_token_logits, dim=-1)
+                    next_token = torch.multinomial(probs, num_samples=1)
+                else:
+                    next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
+                
+                # Append next token to output
+                output = torch.cat([output, next_token], dim=-1)
+                
+                # Check if EOS token is generated
+                if (next_token == eos_token_id).any():
+                    break
+        
+        return output
+
 def evaluate_model(model: nn.Module, val_loader: DataLoader, config: ModelConfig):
     """Evaluate model performance"""
     model.eval()
@@ -348,8 +417,8 @@ def setup_muon_optimizer(model: nn.Module, config: ModelConfig):
     return [muon_optimizer, adamw_optimizer]
 
 def train_model(config: ModelConfig, train_loader: DataLoader, val_loader: DataLoader):
-    """Train the model with Muon optimizer"""
-    print(f"\n🚀 Training Small model with Muon optimizer")
+    """Train the model with Muon optimizer for specified number of epochs"""
+    print(f"\n🚀 Training Small model with Muon optimizer for {config.num_epochs} epochs")
 
     # Initialize model
     set_seed(42)
@@ -363,15 +432,18 @@ def train_model(config: ModelConfig, train_loader: DataLoader, val_loader: DataL
     # Setup optimizers
     optimizers = setup_muon_optimizer(model, config)
 
+    # Calculate total steps for learning rate scheduling
+    total_steps = len(train_loader) * config.num_epochs
+    
     # Learning rate schedule
     schedulers = []
     for optimizer in optimizers:
-        warmup_steps = config.max_steps // 20
+        warmup_steps = total_steps // 20
         def lr_lambda(step):
             if step < warmup_steps:
                 return step / warmup_steps
             else:
-                progress = (step - warmup_steps) / (config.max_steps - warmup_steps)
+                progress = (step - warmup_steps) / (total_steps - warmup_steps)
                 return 0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * progress))
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
@@ -385,13 +457,15 @@ def train_model(config: ModelConfig, train_loader: DataLoader, val_loader: DataL
     start_time = time.time()
     best_val_loss = float('inf')
 
-    pbar = tqdm(total=config.max_steps, desc="Training")
-
-    while step < config.max_steps:
-        for batch_idx, (x, y) in enumerate(train_loader):
-            if step >= config.max_steps:
-                break
-
+    for epoch in range(config.num_epochs):
+        print(f"\n📚 Epoch {epoch + 1}/{config.num_epochs}")
+        epoch_loss = 0
+        epoch_correct = 0
+        epoch_total = 0
+        
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}")
+        
+        for batch_idx, (x, y) in enumerate(pbar):
             x, y = x.to(device), y.to(device)
 
             # Forward pass with gradient accumulation
@@ -408,7 +482,7 @@ def train_model(config: ModelConfig, train_loader: DataLoader, val_loader: DataL
                 loss.backward()
 
             # Optimizer step after accumulation
-            if (step + 1) % config.gradient_accumulation_steps == 0:
+            if (batch_idx + 1) % config.gradient_accumulation_steps == 0:
                 if config.use_amp:
                     for optimizer in optimizers:
                         scaler.unscale_(optimizer)
@@ -428,34 +502,46 @@ def train_model(config: ModelConfig, train_loader: DataLoader, val_loader: DataL
                     for scheduler in schedulers:
                         scheduler.step()
 
-            # Logging
-            if step % 100 == 0:
-                with torch.no_grad():
-                    predictions = logits.argmax(dim=-1)
-                    accuracy = (predictions == y).float().mean().item()
-                    current_loss = loss.item() * config.gradient_accumulation_steps
-                    perplexity = math.exp(min(current_loss, 20))
+            # Update epoch statistics
+            epoch_loss += loss.item() * config.gradient_accumulation_steps
+            predictions = logits.argmax(dim=-1)
+            epoch_correct += (predictions == y).sum().item()
+            epoch_total += y.numel()
+            step += 1
 
+            # Update progress bar
+            if batch_idx % 10 == 0:
+                current_loss = loss.item() * config.gradient_accumulation_steps
+                current_accuracy = (predictions == y).float().mean().item()
+                current_perplexity = math.exp(min(current_loss, 20))
+                current_lr = optimizers[0].param_groups[0]["lr"]
+                
                 pbar.set_postfix({
                     'loss': f'{current_loss:.4f}',
-                    'acc': f'{accuracy:.3f}',
-                    'ppl': f'{perplexity:.1f}',
-                    'lr': f'{optimizers[0].param_groups[0]["lr"]:.2e}'
+                    'acc': f'{current_accuracy:.3f}',
+                    'ppl': f'{current_perplexity:.1f}',
+                    'lr': f'{current_lr:.2e}'
                 })
 
-            # Evaluation
-            if step % config.eval_every == 0 and step > 0:
-                eval_metrics = evaluate_model(model, val_loader, config)
-                print(f"\nStep {step}: Val Loss: {eval_metrics['val_loss']:.4f}, "
-                      f"Val Acc: {eval_metrics['val_accuracy']:.4f}, "
-                      f"Val PPL: {eval_metrics['val_perplexity']:.2f}")
+        # End of epoch
+        avg_epoch_loss = epoch_loss / len(train_loader)
+        avg_epoch_accuracy = epoch_correct / epoch_total
+        epoch_perplexity = math.exp(min(avg_epoch_loss, 20))
+        
+        print(f"  📊 Epoch {epoch + 1} Summary:")
+        print(f"     Loss: {avg_epoch_loss:.4f}")
+        print(f"     Accuracy: {avg_epoch_accuracy:.4f}")
+        print(f"     Perplexity: {epoch_perplexity:.2f}")
 
-                if eval_metrics['val_loss'] < best_val_loss:
-                    best_val_loss = eval_metrics['val_loss']
+        # Evaluation every epoch
+        eval_metrics = evaluate_model(model, val_loader, config)
+        print(f"  🔍 Validation - Loss: {eval_metrics['val_loss']:.4f}, "
+              f"Acc: {eval_metrics['val_accuracy']:.4f}, "
+              f"PPL: {eval_metrics['val_perplexity']:.2f}")
 
-            step += 1
-            if step % 100 == 0:
-                pbar.update(100)
+        if eval_metrics['val_loss'] < best_val_loss:
+            best_val_loss = eval_metrics['val_loss']
+            print(f"  🏆 New best validation loss: {best_val_loss:.4f}")
 
     pbar.close()
 
@@ -483,7 +569,7 @@ if __name__ == "__main__":
     config = ModelConfig()
     print(f"\n📋 Model Configuration:")
     print(f"   Architecture: {config.d_model}d, {config.n_layers}L, {config.n_heads}H, {config.d_ff}ff")
-    print(f"   Training: {config.max_steps} steps, batch size {config.batch_size}")
+    print(f"   Training: {config.num_epochs} epochs, batch size {config.batch_size}")
     print(f"   Data: {config.max_tokens:,} tokens, seq_len {config.max_seq_len}")
 
     # Load data
@@ -513,3 +599,13 @@ if __name__ == "__main__":
     print(f"   Validation Loss: {final_metrics['val_loss']:.4f}")
     print(f"   Validation Accuracy: {final_metrics['val_accuracy']:.4f}")
     print(f"   Validation Perplexity: {final_metrics['val_perplexity']:.2f}")
+    
+    # Save the trained model
+    model_save_path = "trained_model.pth"
+    print(f"\n💾 Saving trained model to {model_save_path}")
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'config': config,
+        'final_metrics': final_metrics
+    }, model_save_path)
+    print(f"✅ Model saved successfully!")
