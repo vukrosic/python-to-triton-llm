@@ -14,6 +14,7 @@ from typing import List, Optional
 import warnings
 import os
 import pickle
+import pandas as pd
 warnings.filterwarnings('ignore')
 
 def set_seed(seed: int = 42):
@@ -110,9 +111,9 @@ class Muon(torch.optim.Optimizer):
                 p.add_(g.view_as(p), alpha=-group["lr"] * max(1, p.size(-2) / p.size(-1))**0.5)
 	
 def load_and_cache_data(config: ModelConfig, cache_dir: str = "data_cache"):
-    """Load and cache tokenized data from local Python files"""
+    """Load and cache tokenized data from training_data.csv"""
     os.makedirs(cache_dir, exist_ok=True)
-    cache_file = f"{cache_dir}/tokenized_data_local_files.pkl"
+    cache_file = f"{cache_dir}/tokenized_training_data.pkl"
 
     # Check if cached data exists
     if os.path.exists(cache_file):
@@ -125,32 +126,46 @@ def load_and_cache_data(config: ModelConfig, cache_dir: str = "data_cache"):
         tokens = cached_data['tokens']
         config.vocab_size = tokenizer.vocab_size
 
-        print(f"✅ Loaded {len(texts)} documents, {len(tokens):,} tokens from cache")
+        print(f"✅ Loaded {len(texts)} training examples, {len(tokens):,} tokens from cache")
         return texts, tokenizer, tokens
 
-    print(f"🔄 Processing local Python files (will cache for future use)")
+    print(f"🔄 Processing training_data.csv (will cache for future use)")
 
     # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M", token=False)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Load local Python files from data directory
-    data_dir = "data"
-    python_files = ["2.py", "3.py", "4.py", "5.py"]
-    
-    texts = []
-    for filename in python_files:
-        file_path = os.path.join(data_dir, filename)
-        if os.path.exists(file_path):
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-                texts.append(content)
-                print(f"📁 Loaded {filename}: {len(content)} characters")
-        else:
-            print(f"⚠️ Warning: {filename} not found")
+    # Load training data from CSV
+    try:
+        df = pd.read_csv("training_data.csv")
+        print(f"📊 Loaded CSV with {len(df)} rows")
+        print(f"Columns: {list(df.columns)}")
+        
+        # Format as Python function -> Triton kernel pairs
+        texts = []
+        for _, row in df.iterrows():
+            python_func = row['python_function_body'].strip()
+            triton_kernel = row['triton_kernel_body'].strip()
+            
+            # Create training example: Python function followed by Triton kernel
+            training_example = f"Python function:\n{python_func}\n\nTriton kernel:\n{triton_kernel}"
+            texts.append(training_example)
+            
+            print(f"📝 Example {len(texts)}:")
+            print(f"   Python: {python_func[:50]}...")
+            print(f"   Triton: {triton_kernel[:50]}...")
+            print()
+            
+    except Exception as e:
+        print(f"❌ Error loading CSV: {e}")
+        # Fallback to some example data
+        texts = [
+            "Python function:\ny = torch.sigmoid(x)\n\nTriton kernel:\npid = tl.program_id(axis=0)\noffsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)\nmask = offsets < n_elements\nx = tl.load(input_ptr + offsets, mask=mask)\nresult = tl.sigmoid(x)\ntl.store(output_ptr + offsets, result, mask=mask)",
+            "Python function:\nresult = x + y\n\nTriton kernel:\npid = tl.program_id(axis=0)\noffsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)\nmask = offsets < n_elements\nx = tl.load(x_ptr + offsets, mask=mask)\ny = tl.load(y_ptr + offsets, mask=mask)\noutput = x + y\ntl.store(output_ptr + offsets, output, mask=mask)"
+        ]
 
-    print(f"Loaded {len(texts)} Python files")
+    print(f"Loaded {len(texts)} training examples")
 
     # Tokenize
     print("Tokenizing texts...")
@@ -555,7 +570,153 @@ def train_model(config: ModelConfig, train_loader: DataLoader, val_loader: DataL
 
     return model, final_eval
 
+def load_trained_model(model_path: str = "trained_model.pth"):
+    """Load a pre-trained model for inference"""
+    if not os.path.exists(model_path):
+        print(f"❌ Model file {model_path} not found!")
+        print("Please train the model first or provide the correct path.")
+        return None, None
+    
+    print(f"📥 Loading pre-trained model from {model_path}")
+    
+    checkpoint = torch.load(model_path, map_location='cpu')
+    config = checkpoint['config']
+    
+    # Initialize model
+    model = MinimalLLM(config)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = model.to(device)
+    model.eval()
+    
+    print(f"✅ Model loaded successfully!")
+    print(f"📊 Final metrics: {checkpoint['final_metrics']}")
+    
+    return model, config
+
+def interactive_demo():
+    """Interactive demo to test the model with custom Python functions"""
+    print("\n🎮 INTERACTIVE DEMO MODE")
+    print("=" * 40)
+    print("Enter Python functions and see the generated Triton kernels!")
+    print("Type 'quit' to exit.")
+    
+    # Load model
+    model, config = load_trained_model()
+    if model is None:
+        return
+    
+    # Load tokenizer
+    tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M", token=False)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    
+    device = next(model.parameters()).device
+    
+    while True:
+        try:
+            python_func = input("\n🐍 Enter Python function (or 'quit'): ").strip()
+            
+            if python_func.lower() == 'quit':
+                break
+            
+            if not python_func:
+                continue
+            
+            print(f"\n🔄 Generating Triton kernel for: {python_func}")
+            
+            # Tokenize input
+            input_text = f"Python function:\n{python_func}\n\nTriton kernel:\n"
+            input_ids = tokenizer.encode(input_text, return_tensors='pt').to(device)
+            
+            # Generate
+            with torch.no_grad():
+                generated_ids = model.generate(
+                    input_ids,
+                    max_length=input_ids.shape[1] + 300,
+                    temperature=0.7,
+                    top_p=0.9,
+                    top_k=50,
+                    do_sample=True,
+                    pad_token_id=tokenizer.pad_token_id,
+                    eos_token_id=tokenizer.eos_token_id
+                )
+            
+            # Decode and extract Triton part
+            generated_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+            
+            if "Triton kernel:" in generated_text:
+                triton_part = generated_text.split("Triton kernel:")[1].strip()
+            else:
+                triton_part = generated_text[len(input_text):].strip()
+            
+            print(f"\n🎯 Generated Triton kernel:")
+            print(triton_part)
+            print("-" * 50)
+            
+        except KeyboardInterrupt:
+            print("\n👋 Goodbye!")
+            break
+        except Exception as e:
+            print(f"❌ Error: {e}")
+
+def demonstrate_model(model: nn.Module, tokenizer, device: torch.device):
+    """Demonstrate the model's ability to generate Triton code from Python functions"""
+    print("\n🎯 DEMONSTRATING MODEL CAPABILITIES")
+    print("=" * 50)
+    
+    # Example Python functions to test
+    test_cases = [
+        "y = torch.tanh(x)",
+        "result = torch.maximum(x, y)",
+        "output = torch.pow(x, 2.0)",
+        "z = torch.clamp(x, min_val, max_val)"
+    ]
+    
+    model.eval()
+    with torch.no_grad():
+        for i, python_func in enumerate(test_cases, 1):
+            print(f"\n🧪 Test Case {i}: Python function")
+            print(f"Input: {python_func}")
+            
+            # Tokenize the Python function
+            input_text = f"Python function:\n{python_func}\n\nTriton kernel:\n"
+            input_ids = tokenizer.encode(input_text, return_tensors='pt').to(device)
+            
+            # Generate Triton kernel
+            generated_ids = model.generate(
+                input_ids,
+                max_length=input_ids.shape[1] + 200,  # Allow space for Triton code
+                temperature=0.7,
+                top_p=0.9,
+                top_k=50,
+                do_sample=True,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id
+            )
+            
+            # Decode the generated text
+            generated_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+            
+            # Extract just the generated Triton part
+            if "Triton kernel:" in generated_text:
+                triton_part = generated_text.split("Triton kernel:")[1].strip()
+            else:
+                triton_part = generated_text[len(input_text):].strip()
+            
+            print(f"\n🎯 Generated Triton kernel:")
+            print(triton_part)
+            print("-" * 40)
+
 if __name__ == "__main__":
+    import sys
+    
+    # Check if user wants interactive demo
+    if len(sys.argv) > 1 and sys.argv[1] == "--demo":
+        interactive_demo()
+        sys.exit(0)
+    
     # Check system
     print(f"🔍 Device: {'CUDA' if torch.cuda.is_available() else 'CPU'}")
     if torch.cuda.is_available():
@@ -609,3 +770,11 @@ if __name__ == "__main__":
         'final_metrics': final_metrics
     }, model_save_path)
     print(f"✅ Model saved successfully!")
+    
+    # Demonstrate the model's capabilities
+    device = next(model.parameters()).device
+    demonstrate_model(model, tokenizer, device)
+    
+    print(f"\n🚀 Model is ready to generate Triton kernels from Python functions!")
+    print(f"💡 You can now use the trained model to convert Python operations to Triton kernels.")
+    print(f"🎮 Run with 'python llm.py --demo' for interactive testing!")

@@ -23,7 +23,6 @@ def cumprod_kernel(
     # Local cumprod
     local_cumprod = tl.cumprod(x, axis=0)
     
-    # Store local cumprod
     tl.store(output_ptr + offsets, local_cumprod, mask=mask)
     # TRITON_KERNEL_BODY_END
 
