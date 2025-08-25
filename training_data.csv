@@ -1,0 +1,57 @@
+python_function_body,triton_kernel_body
+"arange_tensor = torch.arange(start, end, dtype=torch.float32)
+    reshaped_tensor = arange_tensor.reshape(shape)
+    result_tensor = torch.exp(reshaped_tensor)","pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    arange_vals = start_val + offsets
+    exp_vals = tl.exp(arange_vals.to(tl.float32))
+    tl.store(output_ptr + offsets, exp_vals, mask=mask)"
+y = torch.sigmoid(x),"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    
+    x = tl.load(input_ptr + offsets, mask=mask)
+    result = tl.sigmoid(x)
+    tl.store(output_ptr + offsets, result, mask=mask)"
+"v = torch.arange(start, end, dtype=torch.float32)
+    r = v.unsqueeze(0)
+    c = v.unsqueeze(1)","pid_m = tl.program_id(axis=0)
+    pid_n = tl.program_id(axis=1)
+
+    offs_m = pid_m * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offs_n = pid_n * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+
+    mask_m = offs_m < N
+    mask_n = offs_n < N
+
+    vals_r = start_val + offs_n
+    vals_c = start_val + offs_m
+
+    vals_r = tl.expand_dims(vals_r, 0)
+    vals_c = tl.expand_dims(vals_c, 1)
+    
+    result_block = vals_r + vals_c
+
+    output_offsets = output_ptr + offs_m[:, None] * N + offs_n[None, :]
+    tl.store(output_offsets, result_block, mask=mask_m[:, None] & mask_n[None, :])"
+"x = torch.arange(start, end, dtype=torch.float32)
+    condition = x > threshold
+    y = torch.where(condition, torch.cos(x), torch.sin(x))","pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    
+    x = start_val + offsets
+    
+    condition = x > threshold
+    
+    result = tl.where(condition, tl.cos(x.to(tl.float32)), tl.sin(x.to(tl.float32)))
+    
+    tl.store(output_ptr + offsets, result, mask=mask)"
+result = x + y,"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)"
