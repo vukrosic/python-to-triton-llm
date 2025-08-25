@@ -39,31 +39,30 @@ def triton_arange_reshape_exp(start: int, end: int, shape: tuple[int, ...]) -> t
     return output_tensor.reshape(shape)
 
 if __name__ == '__main__':
+    import sys
+
+    print("--- Running Test: arange_reshape_exp ---")
+    
     start = 0
     end = 256
     shape = (16, 16)
 
-    print("--- Testing Implementations ---")
-    
     python_result = python_arange_reshape_exp(start, end, shape)
-    print("Python implementation executed.")
 
-    if torch.cuda.is_available():
-        triton_result = triton_arange_reshape_exp(start, end, shape)
-        print("Triton implementation executed.")
+    if not torch.cuda.is_available():
+        print("SKIPPED: CUDA not available.")
+        sys.exit(0)
         
-        print("\n--- Comparison ---")
-        are_close = torch.allclose(python_result.cuda(), triton_result)
-        print(f"Are the results close? {are_close}")
+    triton_result = triton_arange_reshape_exp(start, end, shape)
 
-        if are_close:
-            print("✅ Test passed!")
-        else:
-            print("❌ Test failed!")
-            print("Python result:")
-            print(python_result)
-            print("Triton result:")
-            print(triton_result)
-            
+    are_close = torch.allclose(python_result.cuda(), triton_result)
+    
+    if are_close:
+        print("✅ PASSED")
+        sys.exit(0)
     else:
-        print("\nCUDA not available, skipping Triton execution and comparison.")
+        print("❌ FAILED")
+        abs_diff = torch.abs(python_result.cuda() - triton_result)
+        max_abs_diff = torch.max(abs_diff)
+        print(f"  - Max Absolute Difference: {max_abs_diff.item()}")
+        sys.exit(1)
