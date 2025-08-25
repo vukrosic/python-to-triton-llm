@@ -10,27 +10,72 @@ from run_all_tests import run_test_on_file
 def get_function_body(func):
     """Extracts the indented body of a function from its source code."""
     try:
-        source_lines = inspect.getsource(func).splitlines()
+        source = inspect.getsource(func)
+        lines = source.splitlines()
+        
+        # Find the line with 'def ' - could be after decorators
         def_line_index = -1
-        for i, line in enumerate(source_lines):
-            if line.strip().startswith('def '):
+        for i, line in enumerate(lines):
+            if 'def ' in line and '(' in line:  # More robust check
                 def_line_index = i
                 break
         
         if def_line_index == -1:
+            print(f"    - Could not find def line")
             return ""
-
-        body_lines = source_lines[def_line_index + 1:]
+        
+        # Handle multi-line function signatures
+        # Find where the function signature ends (look for ':')
+        signature_end_index = def_line_index
+        for i in range(def_line_index, len(lines)):
+            if ':' in lines[i]:
+                signature_end_index = i
+                break
+        
+        # Get body lines (everything after the signature)
+        body_lines = lines[signature_end_index + 1:]
         
         if not body_lines:
+            print(f"    - No body lines found")
             return ""
         
-        indentation = len(body_lines[0]) - len(body_lines[0].lstrip(' ')) 
-        unindented_body = [line[indentation:] for line in body_lines]
+        # Find the indentation of the first non-empty line in the body
+        first_non_empty_idx = -1
+        for i, line in enumerate(body_lines):
+            if line.strip():  # Non-empty line
+                first_non_empty_idx = i
+                break
+        
+        if first_non_empty_idx == -1:
+            print(f"    - No non-empty body lines found")
+            return ""
+        
+        # Calculate indentation from the first non-empty body line
+        first_non_empty = body_lines[first_non_empty_idx]
+        indentation = len(first_non_empty) - len(first_non_empty.lstrip())
+        
+        # Remove the indentation from all body lines
+        unindented_body = []
+        for line in body_lines:
+            if line.strip():  # Non-empty line
+                if len(line) >= indentation and line[:indentation].isspace():
+                    unindented_body.append(line[indentation:])
+                else:
+                    # Line has less indentation than expected, just strip what's there
+                    unindented_body.append(line.lstrip())
+            else:
+                unindented_body.append('')  # Keep empty lines
+        
+        # Remove trailing empty lines
+        while unindented_body and not unindented_body[-1].strip():
+            unindented_body.pop()
         
         return "\n".join(unindented_body)
-
-    except (TypeError, OSError):
+        
+    except Exception as e:
+        print(f"    - Error in get_function_body: {e}")
+        import traceback
+        traceback.print_exc()
         return ""
 
 def extract_training_pair(file_path):
@@ -51,7 +96,7 @@ def extract_training_pair(file_path):
                 
                 for decorator in node.decorator_list:
                     decorator_source = ast.get_source_segment(source, decorator)
-                    if 'triton.jit' in decorator_source:
+                    if decorator_source and 'triton.jit' in decorator_source:
                         triton_kernel_name = node.name
                         break
         
@@ -78,6 +123,7 @@ def extract_training_pair(file_path):
             print("  - FAILED: Could not extract Triton kernel body.")
 
         if python_body and triton_body:
+            # Remove the return statement from Python body if present
             lines = python_body.splitlines()
             if lines and lines[-1].strip().startswith("return "):
                 python_body = "\n".join(lines[:-1]).strip()
@@ -121,6 +167,8 @@ def main():
     print(f"\nWriting extracted data to {csv_file}...")
     if not training_data:
         print("WARNING: No data was extracted. The CSV file will be empty.")
+    else:
+        print(f"Successfully extracted {len(training_data)} training pairs.")
 
     with open(csv_file, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=['python_function_body', 'triton_kernel_body'])
