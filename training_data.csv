@@ -1,4 +1,11 @@
 python_function_body,triton_kernel_body
+"return torch.minimum(x, y)","pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    result = tl.minimum(x, y)
+    tl.store(output_ptr + offsets, result, mask=mask)"
 "arange_tensor = torch.arange(start, end, dtype=torch.float32)
     reshaped_tensor = arange_tensor.reshape(shape)
     result_tensor = torch.exp(reshaped_tensor)","pid = tl.program_id(axis=0)
@@ -7,6 +14,47 @@ python_function_body,triton_kernel_body
     arange_vals = start_val + offsets
     exp_vals = tl.exp(arange_vals.to(tl.float32))
     tl.store(output_ptr + offsets, exp_vals, mask=mask)"
+"return torch.full(shape, fill_value).broadcast_to(broadcast_shape)","pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    tl.store(output_ptr + offsets, fill_value, mask=mask)"
+return torch.sqrt(x),"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    result = tl.sqrt(x)
+    tl.store(output_ptr + offsets, result, mask=mask)"
+return torch.randn(shape),"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    random_vals = tl.randn(seed, offsets)
+    tl.store(output_ptr + offsets, random_vals, mask=mask)"
+"return torch.full(shape, fill_value)","pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    tl.store(output_ptr + offsets, fill_value, mask=mask)"
+"return torch.maximum(x, torch.minimum(y, z))","pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    z = tl.load(z_ptr + offsets, mask=mask)
+    min_yz = tl.minimum(y, z)
+    max_x_min_yz = tl.maximum(x, min_yz)
+    tl.store(output_ptr + offsets, max_x_min_yz, mask=mask)"
+return torch.sqrt(torch.sigmoid(x)),"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    sigmoid_x = tl.sigmoid(x)
+    sqrt_sigmoid_x = tl.sqrt(sigmoid_x)
+    tl.store(output_ptr + offsets, sqrt_sigmoid_x, mask=mask)"
+return torch.sin(x),"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    result = tl.sin(x)
+    tl.store(output_ptr + offsets, result, mask=mask)"
 y = torch.sigmoid(x),"pid = tl.program_id(axis=0)
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
@@ -14,6 +62,91 @@ y = torch.sigmoid(x),"pid = tl.program_id(axis=0)
     x = tl.load(input_ptr + offsets, mask=mask)
     result = tl.sigmoid(x)
     tl.store(output_ptr + offsets, result, mask=mask)"
+return torch.zeros_like(x),"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    tl.store(output_ptr + offsets, 0, mask=mask)"
+"return torch.clamp(x, min_val, max_val)","pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    result = tl.maximum(min_val, tl.minimum(x, max_val))
+    tl.store(output_ptr + offsets, result, mask=mask)"
+return (x + div - 1) // div,"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    div = tl.load(div_ptr + offsets, mask=mask)
+    result = tl.cdiv(x, div)
+    tl.store(output_ptr + offsets, result, mask=mask)"
+return x / y,"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    result = tl.div_rn(x, y)
+    tl.store(output_ptr + offsets, result, mask=mask)"
+"return torch.log(torch.full(shape, fill_value).broadcast_to(broadcast_shape))","pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    value = tl.full((BLOCK_SIZE,), fill_value, dtype=tl.float32)
+    log_value = tl.log(value)
+    tl.store(output_ptr + offsets, log_value, mask=mask)"
+return x.T,"pid_n = tl.program_id(0)
+    pid_m = tl.program_id(1)
+
+    offs_n = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    offs_m = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+
+    x_ptrs = x_ptr + offs_n[:, None] * M + offs_m[None, :]
+    mask = (offs_n[:, None] < N) & (offs_m[None, :] < M)
+    x = tl.load(x_ptrs, mask=mask)
+
+    output_ptrs = output_ptr + offs_m[:, None] * N + offs_n[None, :]
+    tl.store(output_ptrs, tl.trans(x), mask=tl.trans(mask))"
+"zeros_tensor = torch.zeros(shape, dtype=x.dtype)
+    return zeros_tensor + x","pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    # In this simple case, we just copy the tensor since we are adding to zeros.
+    # A more general kernel would take two input tensors.
+    tl.store(output_ptr + offsets, x, mask=mask)"
+return x + y,"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    result = x + y
+    tl.store(output_ptr + offsets, result, mask=mask)"
+"return torch.maximum(x, y)","pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    result = tl.maximum(x, y)
+    tl.store(output_ptr + offsets, result, mask=mask)"
+return torch.exp(x),"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    result = tl.exp(x)
+    tl.store(output_ptr + offsets, result, mask=mask)"
+return torch.sin(x.permute(dims)),"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    result = tl.sin(x)
+    tl.store(output_ptr + offsets, result, mask=mask)"
+"return torch.cumprod(x, dim=0)","pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask, other=1.0)
+    
+    # Local cumprod
+    local_cumprod = tl.cumprod(x, axis=0)
+    
+    tl.store(output_ptr + offsets, local_cumprod, mask=mask)"
 "v = torch.arange(start, end, dtype=torch.float32)
     r = v.unsqueeze(0)
     c = v.unsqueeze(1)","pid_m = tl.program_id(axis=0)
@@ -35,6 +168,114 @@ y = torch.sigmoid(x),"pid = tl.program_id(axis=0)
 
     output_offsets = output_ptr + offs_m[:, None] * N + offs_n[None, :]
     tl.store(output_offsets, result_block, mask=mask_m[:, None] & mask_n[None, :])"
+"return torch.where(condition, x, y)","pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    condition = tl.load(condition_ptr + offsets, mask=mask)
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    result = tl.where(condition, x, y)
+    tl.store(output_ptr + offsets, result, mask=mask)"
+"return torch.cos(torch.cat((x, y), dim=dim))","pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    result = tl.cos(x)
+    tl.store(output_ptr + offsets, result, mask=mask)"
+return torch.floor(x) + torch.ceil(y),"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    floor_x = tl.floor(x)
+    ceil_y = tl.ceil(y)
+    result = floor_x + ceil_y
+    tl.store(output_ptr + offsets, result, mask=mask)"
+"return torch.abs(torch.where(condition, x, y))","pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    condition = tl.load(condition_ptr + offsets, mask=mask)
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    result = tl.where(condition, x, y)
+    result_abs = tl.abs(result)
+    tl.store(output_ptr + offsets, result_abs, mask=mask)"
+return x.to(dtype),"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    result = x.to(output_dtype)
+    tl.store(output_ptr + offsets, result, mask=mask)"
+return torch.rsqrt(x + y + 1e-8),"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    result = tl.rsqrt(x + y + 1e-8)
+    tl.store(output_ptr + offsets, result, mask=mask)"
+return x * y + z,"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    z = tl.load(z_ptr + offsets, mask=mask)
+    result = tl.fma(x, y, z)
+    tl.store(output_ptr + offsets, result, mask=mask)"
+return torch.sum(x),"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask, other=0.0)
+    sum_val = tl.sum(x, axis=0)
+    tl.store(output_ptr + pid, sum_val)"
+return torch.log(x),"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    result = tl.log(x)
+    tl.store(output_ptr + offsets, result, mask=mask)"
+return torch.erf(x),"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    result = tl.erf(x)
+    tl.store(output_ptr + offsets, result, mask=mask)"
+"return torch.pow(torch.full(shape, fill_value), power)","pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    # tl.pow is not a thing, so we use exp(power * log(base))
+    base = tl.full((BLOCK_SIZE,), fill_value, dtype=tl.float32)
+    log_base = tl.log(base)
+    pow_val = tl.exp(power * log_base)
+    tl.store(output_ptr + offsets, pow_val, mask=mask)"
+"return torch.arange(start, end, dtype=torch.float32).reshape(shape)","pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    values = start + offsets
+    tl.store(output_ptr + offsets, values, mask=mask)"
+"return torch.unsqueeze(x, axis)","pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    tl.store(output_ptr + offsets, x, mask=mask)"
+return torch.cos(x),"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    result = tl.cos(x)
+    tl.store(output_ptr + offsets, result, mask=mask)"
+return torch.abs(x),"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    result = tl.abs(x)
+    tl.store(output_ptr + offsets, result, mask=mask)"
+"zeros_tensor = torch.zeros(shape, dtype=x.dtype)
+    return torch.abs(zeros_tensor + x)","pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    result = tl.abs(x)
+    tl.store(output_ptr + offsets, result, mask=mask)"
 "x = torch.arange(start, end, dtype=torch.float32)
     condition = x > threshold
     y = torch.where(condition, torch.cos(x), torch.sin(x))","pid = tl.program_id(axis=0)
@@ -48,6 +289,15 @@ y = torch.sigmoid(x),"pid = tl.program_id(axis=0)
     result = tl.where(condition, tl.cos(x.to(tl.float32)), tl.sin(x.to(tl.float32)))
     
     tl.store(output_ptr + offsets, result, mask=mask)"
+return torch.sin(x) + torch.cos(y),"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    sin_x = tl.sin(x)
+    cos_y = tl.cos(y)
+    result = sin_x + cos_y
+    tl.store(output_ptr + offsets, result, mask=mask)"
 result = x + y,"pid = tl.program_id(axis=0)
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
@@ -55,3 +305,24 @@ result = x + y,"pid = tl.program_id(axis=0)
     y = tl.load(y_ptr + offsets, mask=mask)
     output = x + y
     tl.store(output_ptr + offsets, output, mask=mask)"
+return torch.sum(torch.ravel(x)),"pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask, other=0.0)
+    sum_val = tl.sum(x, axis=0)
+    tl.store(output_ptr + pid, sum_val)"
+"for i, v in zip(indices, values):
+        x[i] = max(x[i], v)
+    return x","pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    indices = tl.load(indices_ptr + offsets, mask=mask)
+    values = tl.load(values_ptr + offsets, mask=mask)
+    tl.atomic_max(x_ptr + indices, values, mask=mask)"
+"return torch.sqrt(torch.clamp(x, min_val, max_val))","pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    clamped_x = tl.maximum(min_val, tl.minimum(x, max_val))
+    sqrt_x = tl.sqrt(clamped_x)
+    tl.store(output_ptr + offsets, sqrt_x, mask=mask)"
