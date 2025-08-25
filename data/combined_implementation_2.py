@@ -3,9 +3,11 @@ import triton
 import triton.language as tl
 
 def python_broadcast_add(start: int, end: int) -> torch.Tensor:
+    # PYTHON_BODY_START
     v = torch.arange(start, end, dtype=torch.float32)
     r = v.unsqueeze(0)
     c = v.unsqueeze(1)
+    # PYTHON_BODY_END
     return r + c
 
 @triton.jit
@@ -15,6 +17,7 @@ def broadcast_add_kernel(
     N,
     BLOCK_SIZE: tl.constexpr,
 ):
+    # TRITON_KERNEL_BODY_START
     pid_m = tl.program_id(axis=0)
     pid_n = tl.program_id(axis=1)
 
@@ -34,6 +37,7 @@ def broadcast_add_kernel(
 
     output_offsets = output_ptr + offs_m[:, None] * N + offs_n[None, :]
     tl.store(output_offsets, result_block, mask=mask_m[:, None] & mask_n[None, :])
+    # TRITON_KERNEL_BODY_END
 
 def triton_broadcast_add(start: int, end: int) -> torch.Tensor:
     N = end - start

@@ -1,137 +1,41 @@
 import csv
 import glob
-import importlib.util
-import inspect
-import ast
-import torch
 import traceback
 from run_all_tests import run_test_on_file
 
-def get_function_body(func):
-    """Extracts the indented body of a function from its source code."""
-    try:
-        source = inspect.getsource(func)
-        lines = source.splitlines()
-        
-        # Find the line with 'def ' - could be after decorators
-        def_line_index = -1
-        for i, line in enumerate(lines):
-            if 'def ' in line and '(' in line:  # More robust check
-                def_line_index = i
-                break
-        
-        if def_line_index == -1:
-            print(f"    - Could not find def line")
-            return ""
-        
-        # Handle multi-line function signatures
-        # Find where the function signature ends (look for ':')
-        signature_end_index = def_line_index
-        for i in range(def_line_index, len(lines)):
-            if ':' in lines[i]:
-                signature_end_index = i
-                break
-        
-        # Get body lines (everything after the signature)
-        body_lines = lines[signature_end_index + 1:]
-        
-        if not body_lines:
-            print(f"    - No body lines found")
-            return ""
-        
-        # Find the indentation of the first non-empty line in the body
-        first_non_empty_idx = -1
-        for i, line in enumerate(body_lines):
-            if line.strip():  # Non-empty line
-                first_non_empty_idx = i
-                break
-        
-        if first_non_empty_idx == -1:
-            print(f"    - No non-empty body lines found")
-            return ""
-        
-        # Calculate indentation from the first non-empty body line
-        first_non_empty = body_lines[first_non_empty_idx]
-        indentation = len(first_non_empty) - len(first_non_empty.lstrip())
-        
-        # Remove the indentation from all body lines
-        unindented_body = []
-        for line in body_lines:
-            if line.strip():  # Non-empty line
-                if len(line) >= indentation and line[:indentation].isspace():
-                    unindented_body.append(line[indentation:])
-                else:
-                    # Line has less indentation than expected, just strip what's there
-                    unindented_body.append(line.lstrip())
-            else:
-                unindented_body.append('')  # Keep empty lines
-        
-        # Remove trailing empty lines
-        while unindented_body and not unindented_body[-1].strip():
-            unindented_body.pop()
-        
-        return "\n".join(unindented_body)
-        
-    except Exception as e:
-        print(f"    - Error in get_function_body: {e}")
-        import traceback
-        traceback.print_exc()
-        return ""
-
 def extract_training_pair(file_path):
-    """Extracts the python and triton function bodies from a file."""
+    """Extracts function bodies using comment markers."""
     print(f"--- Processing: {file_path}")
     try:
         with open(file_path, 'r') as f:
-            source = f.read()
-        tree = ast.parse(source)
+            source_code = f.read()
 
-        python_fn_name = None
-        triton_kernel_name = None
+        # Extract Python body
+        py_start_marker = "# PYTHON_BODY_START"
+        py_end_marker = "# PYTHON_BODY_END"
+        py_start_index = source_code.find(py_start_marker)
+        py_end_index = source_code.find(py_end_marker)
 
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef):
-                if node.name.startswith("python_"):
-                    python_fn_name = node.name
-                
-                for decorator in node.decorator_list:
-                    decorator_source = ast.get_source_segment(source, decorator)
-                    if decorator_source and 'triton.jit' in decorator_source:
-                        triton_kernel_name = node.name
-                        break
-        
-        print(f"  - Found Python function name: {python_fn_name}")
-        print(f"  - Found Triton kernel name: {triton_kernel_name}")
+        if py_start_index == -1 or py_end_index == -1:
+            print("  - FAILED: Could not find Python body markers.")
+            return None, None
+            
+        python_body = source_code[py_start_index + len(py_start_marker) : py_end_index].strip()
 
-        if not python_fn_name or not triton_kernel_name:
-            print("  - FAILED: Could not find both function names via AST parsing.")
+        # Extract Triton kernel body
+        triton_start_marker = "# TRITON_KERNEL_BODY_START"
+        triton_end_marker = "# TRITON_KERNEL_BODY_END"
+        triton_start_index = source_code.find(triton_start_marker)
+        triton_end_index = source_code.find(triton_end_marker)
+
+        if triton_start_index == -1 or triton_end_index == -1:
+            print("  - FAILED: Could not find Triton kernel body markers.")
             return None, None
 
-        spec = importlib.util.spec_from_file_location("temp_module", file_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        python_fn = getattr(module, python_fn_name)
-        triton_kernel = getattr(module, triton_kernel_name)
-
-        python_body = get_function_body(python_fn)
-        triton_body = get_function_body(triton_kernel)
-
-        if not python_body:
-            print("  - FAILED: Could not extract Python function body.")
-        if not triton_body:
-            print("  - FAILED: Could not extract Triton kernel body.")
-
-        if python_body and triton_body:
-            # Remove the return statement from Python body if present
-            lines = python_body.splitlines()
-            if lines and lines[-1].strip().startswith("return "):
-                python_body = "\n".join(lines[:-1]).strip()
-            
-            print("  - SUCCESS: Extracted both bodies.")
-            return python_body, triton_body.strip()
+        triton_body = source_code[triton_start_index + len(triton_start_marker) : triton_end_index].strip()
         
-        return None, None
+        print("  - SUCCESS: Extracted both bodies using markers.")
+        return python_body, triton_body
 
     except Exception as e:
         print(f"  - ERROR: An exception occurred: {e}")
@@ -167,8 +71,6 @@ def main():
     print(f"\nWriting extracted data to {csv_file}...")
     if not training_data:
         print("WARNING: No data was extracted. The CSV file will be empty.")
-    else:
-        print(f"Successfully extracted {len(training_data)} training pairs.")
 
     with open(csv_file, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=['python_function_body', 'triton_kernel_body'])

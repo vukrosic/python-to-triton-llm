@@ -3,9 +3,11 @@ import triton
 import triton.language as tl
 
 def python_arange_reshape_exp(start: int, end: int, shape: tuple[int, ...]) -> torch.Tensor:
+    # PYTHON_BODY_START
     arange_tensor = torch.arange(start, end, dtype=torch.float32)
     reshaped_tensor = arange_tensor.reshape(shape)
     result_tensor = torch.exp(reshaped_tensor)
+    # PYTHON_BODY_END
     return result_tensor
 
 @triton.jit
@@ -15,12 +17,14 @@ def arange_reshape_exp_kernel(
     num_elements,
     BLOCK_SIZE: tl.constexpr,
 ):
+    # TRITON_KERNEL_BODY_START
     pid = tl.program_id(axis=0)
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < num_elements
     arange_vals = start_val + offsets
     exp_vals = tl.exp(arange_vals.to(tl.float32))
     tl.store(output_ptr + offsets, exp_vals, mask=mask)
+    # TRITON_KERNEL_BODY_END
 
 def triton_arange_reshape_exp(start: int, end: int, shape: tuple[int, ...]) -> torch.Tensor:
     num_elements = end - start
