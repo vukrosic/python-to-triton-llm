@@ -2,6 +2,54 @@ import glob
 import subprocess
 import sys
 
+def run_test_on_file(file_path):
+    """
+    Runs a single test file and returns the result.
+    
+    Returns:
+        tuple: (file_path, status, output)
+        - file_path: the path to the test file
+        - status: "Pass", "Fail", "Timeout", or "Error"
+        - output: the stdout/stderr output from the test
+    """
+    print(f"--- Running: {file_path} ---")
+    try:
+        # Use sys.executable to ensure we run with the same Python interpreter
+        process = subprocess.run(
+            [sys.executable, file_path],
+            capture_output=True,
+            text=True,
+            check=False, # Don't raise an exception for non-zero exit codes
+            timeout=60   # Safety timeout of 60 seconds
+        )
+        
+        # Collect the output
+        output = ""
+        if process.stdout:
+            output += process.stdout.strip()
+        if process.stderr:
+            output += "\n--- Stderr ---\n" + process.stderr.strip()
+
+        if process.returncode == 0:
+            status = "Pass"
+            print(f"✅ PASSED: {file_path}")
+        else:
+            status = "Fail"
+            print(f"❌ FAILED: {file_path} (Exit Code: {process.returncode})")
+
+        return file_path, status, output
+
+    except subprocess.TimeoutExpired:
+        status = "Timeout"
+        output = "Test took longer than 60 seconds."
+        print(f"❌ TIMEOUT: {file_path} took longer than 60 seconds.")
+        return file_path, status, output
+    except Exception as e:
+        status = "Error"
+        output = f"An exception occurred: {e}"
+        print(f"❌ ERROR: An exception occurred while running {file_path}: {e}")
+        return file_path, status, output
+
 def main():
     """
     Runs all combined_implementation_*.py files in the data/ directory
