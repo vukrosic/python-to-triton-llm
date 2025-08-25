@@ -579,8 +579,14 @@ def load_trained_model(model_path: str = "trained_model.pth"):
     
     print(f"📥 Loading pre-trained model from {model_path}")
     
-    checkpoint = torch.load(model_path, map_location='cpu')
-    config = checkpoint['config']
+    try:
+        # Try loading with weights_only=False for backward compatibility
+        checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
+        config = checkpoint['config']
+    except Exception as e:
+        print(f"❌ Error loading model: {e}")
+        print("The model file may be corrupted or incompatible.")
+        return None, None
     
     # Initialize model
     model = MinimalLLM(config)
