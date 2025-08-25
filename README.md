@@ -13,4 +13,5 @@ Second video (full tutorial)
 
 - YouTube (eng): Code & Train CODING LLM From Scratch - Step by Step
 
-- Bilibili (中文）：
+- Bilibili (中文）：https://www.bilibili.com/video/BV1bueozVESn/
+
